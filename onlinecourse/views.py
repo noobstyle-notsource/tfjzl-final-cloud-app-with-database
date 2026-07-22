@@ -2,7 +2,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.views import generic
 from django.contrib.auth import login, logout, authenticate
 from django.contrib.auth.models import User
-from .models import Course, Lesson, Question, Choice, Submission
+from .models import Course, Lesson, Question, Choice, Submission, Enrollment
 
 # Course List View
 class CourseListView(generic.ListView):
@@ -42,21 +42,68 @@ def registration_request(request):
             User.objects.get(username=username)
             return redirect('onlinecourse:index')
         except User.DoesNotExist:
-            user = User.objects.create_user(username=username, first_name=first_name, last_name=last_name, password=psw)
+            user = User.objects.create_user(
+                username=username, 
+                first_name=first_name, 
+                last_name=last_name, 
+                password=psw
+            )
             login(request, user)
             return redirect('onlinecourse:index')
     return render(request, 'onlinecourse/user_registration_bootstrap.html')
 
-# Exam submission handlers (if defined/needed)
+# Exam submission handlers
 def submit(request, course_id):
-    return redirect('onlinecourse:index')
+    course = get_object_or_404(Course, pk=course_id)
+    
+    enrollment, created = Enrollment.objects.get_or_create(
+        user=request.user, 
+        course=course
+    )
+    
+    submission = Submission.objects.create(enrollment=enrollment)
+    
+    for key, value in request.POST.items():
+        if key.startswith('choice_'):
+            choice_id = int(value)
+            try:
+                choice = Choice.objects.get(pk=choice_id)
+                submission.choices.add(choice)
+            except Choice.DoesNotExist:
+                pass
+                
+    submission.save()
+    return redirect('onlinecourse:show_exam_result', course_id=course.id, submission_id=submission.id)
+
 
 def show_exam_result(request, course_id, submission_id):
-    return render(request, 'onlinecourse/exam_result_bootstrap.html')
+    context = {}
+    course = get_object_or_404(Course, pk=course_id)
+    submission = get_object_or_404(Submission, pk=submission_id)
+    
+    selected_ids = [choice.id for choice in submission.choices.all()]
+    
+    total_score = 0
+    earned_score = 0
+    
+    # Query questions directly related to the course
+    questions = Question.objects.filter(course=course)
+    for question in questions:
+        total_score += question.grade
+        if question.is_get_score(selected_ids):
+            earned_score += question.grade
+                
+    percentage = int((earned_score / total_score) * 100) if total_score > 0 else 0
+    
+    context['course'] = course
+    context['grade'] = percentage
+    context['total_score'] = total_score
+    context['selected_ids'] = selected_ids
+    
+    return render(request, 'onlinecourse/exam_result_bootstrap.html', context)
 
 def enroll(request, course_id):
     if request.method == 'POST':
         course = get_object_or_404(Course, pk=course_id)
-        # Add enrollment logic here or redirect to course detail
         return redirect('onlinecourse:course_details', pk=course.id)
     return redirect('onlinecourse:index')
